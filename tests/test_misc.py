@@ -16,6 +16,12 @@ from tests.test_base import JSON, JSON_EVENTS, JSON_PARSE_EVENTS, JSON_OBJECT,\
     JSON_KVITEMS
 
 
+def _get_yajl2_c_backend_or_skip():
+    try:
+        return ijson.get_backend("yajl2_c")
+    except ImportError:
+        pytest.skip("yajl2_c is not built")
+
 class TestMisc:
     """Miscellaneous unit tests"""
 
@@ -37,10 +43,7 @@ class TestMisc:
         (2**64, OverflowError, "too large"),
     ])
     def test_yajl2_c_invalid_readinto_length(self, length, exc, match):
-        try:
-            backend = ijson.get_backend("yajl2_c")
-        except ImportError:
-            pytest.skip("yajl2_c is not built")
+        backend = _get_yajl2_c_backend_or_skip()
 
         class BadReadinto:
             def read(self, n):
@@ -54,10 +57,7 @@ class TestMisc:
 
     def test_yajl2_c_readinto_length_checked_against_original_size(self):
         """Check that readinto() cannot make the ijson-controlled buffer grow."""
-        try:
-            backend = ijson.get_backend("yajl2_c")
-        except ImportError:
-            pytest.skip("yajl2_c is not built")
+        backend = _get_yajl2_c_backend_or_skip()
 
         class GrowingReadinto:
             def read(self, n):
@@ -76,10 +76,7 @@ class TestMisc:
 
     def test_yajl2_c_readinto_releasing_memoryview(self):
         """Check that parsing is resilient against readinto() releasing the memoryview."""
-        try:
-            backend = ijson.get_backend("yajl2_c")
-        except ImportError:
-            pytest.skip("yajl2_c is not built")
+        backend = _get_yajl2_c_backend_or_skip()
 
         class ReleasingReadinto:
             n_calls = 0
