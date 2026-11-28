@@ -26,18 +26,13 @@ int reading_generator_init(reading_generator_t *self, PyObject *args, pipeline_n
 	// the two cases later
 	if (PyObject_HasAttrString(file, "readinto")) {
 		M1_N(self->read_func = PyObject_GetAttrString(file, "readinto"));
-		PyObject *pbuf_size = Py_BuildValue("n", buf_size);
-		PyObject *buffer = PyObject_CallFunctionObjArgs((PyObject *)&PyByteArray_Type, pbuf_size, NULL);
-		Py_DECREF(pbuf_size);
-		M1_N(buffer);
-		self->read_buffer_memview = PyMemoryView_FromObject(buffer);
-		Py_DECREF(buffer);
-		M1_N(self->read_buffer_memview);
+		M1_N(self->buffer = PyMem_Malloc(buf_size));
+		self->buf_size_size_t = buf_size;
 	}
 	else {
 		M1_N(self->read_func = PyObject_GetAttrString(file, "read"));
 		self->buf_size = PyLong_FromSsize_t(buf_size);
-		self->read_buffer_memview = NULL;
+		self->buffer = NULL;
 	}
 
 	M1_N(self->events = PyList_New(0));
@@ -60,7 +55,7 @@ void reading_generator_dealloc(reading_generator_t *self)
 #endif
 	Py_XDECREF(self->read_func);
 	Py_XDECREF(self->events);
-	Py_XDECREF(self->read_buffer_memview);
+	PyMem_Free(self->buffer);
 	Py_XDECREF(self->buf_size);
 	Py_XDECREF(self->coro);
 }
@@ -107,7 +102,7 @@ PyObject *reading_generator_next(reading_generator_t *self)
 
 		/* Read data and pass it down to the co-routine */
 		Py_ssize_t bytes_read;
-		if (self->read_buffer_memview == NULL) {
+		if (self->buffer == NULL) {
 			// read_func is "read"
 			Py_buffer view;
 			PyObject *pbuffer = PyObject_CallFunctionObjArgs(self->read_func, self->buf_size, NULL);
@@ -126,28 +121,24 @@ PyObject *reading_generator_next(reading_generator_t *self)
 		}
 		else {
 			// read_func is "readinto"
-			PyObject *py_bytes_read = PyObject_CallFunctionObjArgs(self->read_func, self->read_buffer_memview, NULL);
+			PyObject *memoryview = PyMemoryView_FromMemory((char *)self->buffer, self->buf_size_size_t, PyBUF_WRITE);
+			N_N(memoryview);
+			PyObject *py_bytes_read = PyObject_CallFunctionObjArgs(self->read_func, memoryview, NULL);
+			Py_DECREF(memoryview);
 			N_N(py_bytes_read);
 			bytes_read = PyLong_AsSsize_t(py_bytes_read);
 			Py_DECREF(py_bytes_read);
 			if (bytes_read == -1 && PyErr_Occurred()) {
 				return NULL;
 			}
-			// Exporting the buffer fails if readinto() released the memoryview
-			// (which frees the bytearray behind it), and stops it from being
-			// released while yajl is still reading from it
-			Py_buffer view;
-			N_M1(PyObject_GetBuffer(self->read_buffer_memview, &view, PyBUF_SIMPLE));
-			if (bytes_read < 0 || bytes_read > view.len) {
+			if (bytes_read < 0 || bytes_read > self->buf_size_size_t) {
 				PyErr_Format(PyExc_ValueError,
 				             "readinto() returned invalid length %zd "
 				             "(should have been between 0 and %zd)",
-				             bytes_read, view.len);
-				PyBuffer_Release(&view);
+				             bytes_read, self->buf_size_size_t);
 				return NULL;
 			}
-			PyObject *send_res = ijson_yajl_parse(basic_parse_basecoro, view.buf, bytes_read);
-			PyBuffer_Release(&view);
+			PyObject *send_res = ijson_yajl_parse(basic_parse_basecoro, self->buffer, bytes_read);
 			if (!send_res) {
 				reading_generator_catch_exception(self);
 			}
